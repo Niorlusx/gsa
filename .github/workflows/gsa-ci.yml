@@ -1,0 +1,56 @@
+name: GSA CI
+
+on:
+  push:
+    paths:
+      - "gsa"
+      - "gsa.config.json"
+      - "AGENTS.md"
+      - ".github/workflows/gsa-ci.yml"
+  pull_request:
+    paths:
+      - "gsa"
+      - "gsa.config.json"
+      - "AGENTS.md"
+      - ".github/workflows/gsa-ci.yml"
+
+jobs:
+  smoke:
+    name: Smoke & syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-gsa-${{ hashFiles('**/requirements*.txt', 'gsa') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-gsa-
+
+      - name: Install dependencies
+        run: pip install openai
+
+      - name: Syntax check
+        run: python3 -m py_compile gsa
+
+      - name: Validate config JSON
+        run: python3 -c "import json; json.load(open('gsa.config.json')); print('config ok')"
+
+      - name: Non-interactive smoke test
+        run: python3 gsa smoke
+
+      - name: Version
+        run: python3 gsa version
+
+      - name: Doctor (informational)
+        run: python3 gsa doctor
+        continue-on-error: true
