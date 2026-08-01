@@ -2,7 +2,7 @@
 
 **Precision Workers Edition** — single-job agents, hard role constraints, proof-of-work output.
 
-**v1.5.0** — stdlib LLM connector (no `openai` package).
+**v1.5.1** — stdlib LLM connector · loading options · keyword gaps · ASA research.
 
 ```bash
 export GROK_API_KEY=xai-...
@@ -19,7 +19,12 @@ python3 gsa smoke && python3 gsa run
 | `gsa supervisor` | Always-on + auto-restart |
 | `gsa status` / `gsa smoke` / `gsa doctor` | Health checks |
 | `gsa config` / `gsa roadmap` / `gsa schema` | Config & schema (JSON map) |
+| `gsa keywords --yours … --theirs …` | Competitor keyword gaps (local JSON) |
+| `gsa keywords --llm …` | Gaps + Competitor Watcher narrative |
+| `gsa loading` / `gsa asa` | Loading resolution / Apple Search Ads notes |
 | `gsa license` / `gsa version` / `gsa help` | Meta |
+
+Loading flags: `--loading system|prepend_user|off` · `--no-memory` · see **[docs/LOADING.md](docs/LOADING.md)**.
 
 ## Workers
 

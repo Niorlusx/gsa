@@ -1,7 +1,16 @@
 {
   "env": "development",
   "project_ref": "knqcjedftfgmnhdgjnoo",
-  "workers": [1, 2, 3, 4, 5, 6, 7, 8],
+  "workers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
   "license_env": "GROK_LICENSE",
   "connectors": {
     "llm": {
@@ -9,7 +18,26 @@
       "api_base": "https://api.x.ai/v1",
       "model": "grok-4.5",
       "temperature": 0.4,
-      "api_key_env": ["GROK_API_KEY", "XAI_API_KEY"]
+      "api_key_env": [
+        "GROK_API_KEY",
+        "XAI_API_KEY"
+      ]
+    },
+    "apple_search_ads": {
+      "enabled": false,
+      "api_base": "https://api.searchads.apple.com/api/v5",
+      "org_id_env": "ASA_ORG_ID",
+      "client_id_env": "ASA_CLIENT_ID",
+      "client_secret_env": "ASA_CLIENT_SECRET",
+      "notes": "See docs/APPLE_SEARCH_ADS.md \u2014 OAuth not wired in CLI yet"
     }
+  },
+  "loading": {
+    "mode": "system",
+    "memory": true,
+    "agents_md": true,
+    "max_memory_chars": 2000,
+    "max_agents_chars": 2000,
+    "rag_phase": 1
   }
 }

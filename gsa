@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""GSA — Grok Super Agent CLI (Precision Workers) v1.5.0
+"""GSA — Grok Super Agent CLI (Precision Workers) v1.5.1
 
 LLM connector: stdlib only (urllib). No OpenAI package required.
 See docs/LLM_CONNECTOR.md
+Loading: gsa.config.json → loading — see docs/LOADING.md
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -15,11 +17,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 ROOT = Path(__file__).resolve().parent
 CFG_PATH = ROOT / "gsa.config.json"
 MEMORY = ROOT / ".grok" / "project_memory.md"
 AGENTS_MD = ROOT / "AGENTS.md"
+
+# Default context loading (overridden by gsa.config.json → loading)
+DEFAULT_LOADING: dict[str, Any] = {
+    "mode": "system",  # system | prepend_user | off
+    "memory": True,
+    "agents_md": True,
+    "max_memory_chars": 2000,
+    "max_agents_chars": 2000,
+    "rag_phase": 1,
+}
 
 VALID_LICENSES = {
     "GSA-DEMO-2026-LIVE",
@@ -84,7 +96,12 @@ WORKERS = {
     4: {
         "name": "Competitor Watcher",
         "job": "Monitor and analyze competitors",
-        "system": "You are Competitor Watcher. Analyze competitors with evidence-based notes.",
+        "system": (
+            "You are Competitor Watcher. Analyze competitors with evidence-based notes. "
+            "When asked about keywords/ASA/ASO: produce keyword gap tables "
+            "(yours only | theirs only | shared), intent tags, bid/priority hints, "
+            "and Apple Search Ads campaign structure suggestions. No fabricated metrics."
+        ),
     },
     5: {
         "name": "Proposal Builder",
@@ -115,6 +132,7 @@ def load_config() -> dict:
     return {
         "env": os.getenv("GSA_ENV", "development"),
         "workers": list(WORKERS.keys()),
+        "loading": dict(DEFAULT_LOADING),
         "connectors": {
             "llm": {
                 "provider": "xai",
@@ -125,6 +143,29 @@ def load_config() -> dict:
             }
         },
     }
+
+
+def resolve_loading(
+    cfg: dict | None = None,
+    *,
+    override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge default loading + config + runtime override (CLI flags)."""
+    cfg = cfg if cfg is not None else load_config()
+    loading = dict(DEFAULT_LOADING)
+    loading.update(cfg.get("loading") or {})
+    if override:
+        loading.update({k: v for k, v in override.items() if v is not None})
+    mode = str(loading.get("mode") or "system").lower().strip()
+    if mode not in {"system", "prepend_user", "off"}:
+        mode = "system"
+    loading["mode"] = mode
+    loading["memory"] = bool(loading.get("memory", True))
+    loading["agents_md"] = bool(loading.get("agents_md", True))
+    loading["max_memory_chars"] = int(loading.get("max_memory_chars") or 2000)
+    loading["max_agents_chars"] = int(loading.get("max_agents_chars") or 2000)
+    loading["rag_phase"] = int(loading.get("rag_phase") or 1)
+    return loading
 
 
 def resolve_llm(cfg: dict | None = None) -> dict[str, Any]:
@@ -180,13 +221,74 @@ def license_ok() -> bool:
     return lic in VALID_LICENSES
 
 
-def memory_block() -> str:
-    parts = []
-    if MEMORY.exists():
-        parts.append(MEMORY.read_text(encoding="utf-8")[:4000])
-    if AGENTS_MD.exists():
-        parts.append(AGENTS_MD.read_text(encoding="utf-8")[:2000])
+def memory_block(loading: dict[str, Any] | None = None) -> str:
+    """Build project context from disk according to loading options."""
+    loading = loading or resolve_loading()
+    if loading.get("mode") == "off":
+        return ""
+    parts: list[str] = []
+    if loading.get("memory") and MEMORY.exists():
+        cap = int(loading.get("max_memory_chars") or 2000)
+        parts.append(MEMORY.read_text(encoding="utf-8")[:cap])
+    if loading.get("agents_md") and AGENTS_MD.exists():
+        cap = int(loading.get("max_agents_chars") or 2000)
+        parts.append(AGENTS_MD.read_text(encoding="utf-8")[:cap])
+    # Phase 2 hook: rag/ retrieval not selected until rag_phase >= 2
+    if int(loading.get("rag_phase") or 1) >= 2:
+        parts.append(
+            "[rag_phase=2] Vector retrieval not wired into CLI yet — see rag/README.md"
+        )
     return "\n\n".join(parts)
+
+
+def parse_loading_flags(args: list[str]) -> tuple[list[str], dict[str, Any]]:
+    """
+    Pull loading flags from argv-like list.
+    --loading system|prepend_user|off
+    --no-memory / --memory
+    --no-agents / --agents
+    --max-memory N
+    """
+    out: list[str] = []
+    override: dict[str, Any] = {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--loading" and i + 1 < len(args):
+            override["mode"] = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--loading="):
+            override["mode"] = a.split("=", 1)[1]
+            i += 1
+            continue
+        if a in {"--no-memory", "--memory-off"}:
+            override["memory"] = False
+            i += 1
+            continue
+        if a == "--memory":
+            override["memory"] = True
+            i += 1
+            continue
+        if a in {"--no-agents", "--no-agents-md"}:
+            override["agents_md"] = False
+            i += 1
+            continue
+        if a in {"--agents", "--agents-md"}:
+            override["agents_md"] = True
+            i += 1
+            continue
+        if a == "--max-memory" and i + 1 < len(args):
+            override["max_memory_chars"] = int(args[i + 1])
+            i += 2
+            continue
+        if a == "--rag-phase" and i + 1 < len(args):
+            override["rag_phase"] = int(args[i + 1])
+            i += 2
+            continue
+        out.append(a)
+        i += 1
+    return out, override
 
 
 def chat_completions(
@@ -234,18 +336,28 @@ def chat_completions(
         raise SystemExit(f"Unexpected LLM response: {json.dumps(payload)[:500]}") from e
 
 
-def run_worker(wid: int, task: str = "") -> str:
+def run_worker(
+    wid: int,
+    task: str = "",
+    *,
+    loading_override: dict[str, Any] | None = None,
+) -> str:
     if not license_ok():
         raise SystemExit("Invalid GROK_LICENSE. Use GSA-DEMO-2026-LIVE or GSA-FULL-ACCESS-2026")
     if wid not in WORKERS:
         raise SystemExit(f"Unknown worker {wid}. Use 1-8.")
     w = WORKERS[wid]
     llm = resolve_llm()
-    mem = memory_block()
+    loading = resolve_loading(override=loading_override)
+    mem = memory_block(loading)
     system = w["system"]
-    if mem:
-        system += "\n\n# Project memory\n" + mem
     user = task or f"Execute your core job: {w['job']}. Give a concise actionable result."
+    mode = loading.get("mode") or "system"
+    if mem and mode == "system":
+        system += "\n\n# Project memory\n" + mem
+    elif mem and mode == "prepend_user":
+        user = f"# Project memory\n{mem}\n\n# Task\n{user}"
+    # mode == "off" → no injection
     return chat_completions(
         [
             {"role": "system", "content": system},
@@ -253,6 +365,89 @@ def run_worker(wid: int, task: str = "") -> str:
         ],
         llm=llm,
     )
+
+
+# ── Keyword gap analysis (stdlib) ───────────────────────────────────────────
+
+def _norm_kw(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+
+def analyze_keyword_gaps(
+    yours: list[str],
+    theirs: list[str],
+    *,
+    yours_label: str = "yours",
+    theirs_label: str = "theirs",
+) -> dict[str, Any]:
+    """
+    Set-diff keyword gap analysis for ASO / Apple Search Ads planning.
+    Pure local logic — no network.
+    """
+    y_map = {_norm_kw(k): k.strip() for k in yours if k and k.strip()}
+    t_map = {_norm_kw(k): k.strip() for k in theirs if k and k.strip()}
+    y_set, t_set = set(y_map), set(t_map)
+    only_y = sorted(y_set - t_set)
+    only_t = sorted(t_set - y_set)
+    shared = sorted(y_set & t_set)
+
+    def _intent(kw: str) -> str:
+        k = kw.lower()
+        if any(x in k for x in ("buy", "price", "cost", "cheap", "deal")):
+            return "commercial"
+        if any(x in k for x in ("how", "what", "why", "best", "vs", "versus")):
+            return "research"
+        if any(x in k for x in ("near me", "app", "ios", "iphone")):
+            return "app_discovery"
+        return "generic"
+
+    def _rows(keys: list[str], src: dict[str, str], gap: str) -> list[dict]:
+        return [
+            {
+                "keyword": src[k],
+                "normalized": k,
+                "gap": gap,
+                "intent": _intent(src[k]),
+                "words": len(k.split()),
+                "asa_hint": (
+                    "exact match brand defense"
+                    if gap == "shared"
+                    else ("conquest / test broad" if gap == "theirs_only" else "own exact + Search Match seed")
+                ),
+            }
+            for k in keys
+        ]
+
+    return {
+        "summary": {
+            "yours_count": len(y_set),
+            "theirs_count": len(t_set),
+            "only_yours": len(only_y),
+            "only_theirs": len(only_t),
+            "shared": len(shared),
+            "yours_label": yours_label,
+            "theirs_label": theirs_label,
+        },
+        "only_yours": _rows(only_y, y_map, "yours_only"),
+        "only_theirs": _rows(only_t, t_map, "theirs_only"),
+        "shared": _rows(shared, {**t_map, **y_map}, "shared"),
+        "asa_campaign_sketch": {
+            "brand_exact": [y_map[k] for k in only_y[:20]],
+            "conquest_test": [t_map[k] for k in only_t[:20]],
+            "category_shared": [y_map.get(k) or t_map[k] for k in shared[:20]],
+            "notes": [
+                "Use Apple Ads Campaign Management API v5 for live keyword reports",
+                "OAuth + orgId header required — see docs/APPLE_SEARCH_ADS.md",
+                "Match types: EXACT vs BROAD; Search Match for discovery",
+            ],
+        },
+    }
+
+
+def _split_kw_blob(s: str) -> list[str]:
+    # comma / newline / semicolon
+    parts = re.split(r"[,;\n]+", s)
+    return [p.strip() for p in parts if p.strip()]
 
 
 def cmd_version(_: list[str]) -> None:
@@ -263,9 +458,16 @@ def cmd_help(_: list[str]) -> None:
     print(
         """GSA commands:
   run | worker <1-8> [task] | supervisor
-  smoke | doctor | status | config | license | schema | roadmap | version | help
+  keywords --yours a,b --theirs c,d   competitor keyword gaps (local)
+  keywords --llm --yours ... --theirs ...   gaps + Competitor Watcher narrative
+  asa | loading | smoke | doctor | status | config | license | schema | roadmap
+  version | help
 
-LLM: stdlib connector (no pip openai). Config: connectors.llm — see docs/LLM_CONNECTOR.md"""
+Loading flags (worker/run):
+  --loading system|prepend_user|off
+  --no-memory | --memory | --no-agents | --max-memory N | --rag-phase 1|2
+
+LLM: docs/LLM_CONNECTOR.md · Loading: docs/LOADING.md · ASA: docs/APPLE_SEARCH_ADS.md"""
     )
 
 
@@ -279,6 +481,7 @@ def cmd_config(_: list[str]) -> None:
     cfg = load_config()
     out = dict(cfg)
     out["_resolved_llm"] = resolve_llm(cfg)
+    out["_resolved_loading"] = resolve_loading(cfg)
     print(json.dumps(out, indent=2))
 
 
@@ -314,16 +517,105 @@ def cmd_schema(_: list[str]) -> None:
 def cmd_roadmap(_: list[str]) -> None:
     print(
         """Roadmap:
-  Phase 1: CLI + 8 workers + license + RAG memory + stdlib LLM connector (current)
-  Phase 2: rag/ retrieval
+  Phase 1: CLI + 8 workers + license + RAG memory + loading options + keyword gaps (current)
+  Phase 2: rag/ retrieval (pgvector / LanceDB)
   Phase 3: Stripe webhook licenses + Supabase edge
-  Phase 4: supervisor fleet + dashboards"""
+  Phase 4: Apple Search Ads live OAuth connector + dashboards
+  Phase 5: supervisor fleet"""
     )
+
+
+def cmd_loading(args: list[str]) -> None:
+    """Show or dry-run loading resolution."""
+    rest, override = parse_loading_flags(args)
+    loading = resolve_loading(override=override)
+    block = memory_block(loading)
+    print(json.dumps({"loading": loading, "context_chars": len(block), "preview": block[:400]}, indent=2))
+    if rest:
+        print(f"# unused args: {rest}", file=sys.stderr)
+
+
+def cmd_asa(_: list[str]) -> None:
+    """Print Apple Search Ads API exploration summary (no network)."""
+    path = ROOT / "docs" / "APPLE_SEARCH_ADS.md"
+    if path.exists():
+        print(path.read_text(encoding="utf-8"))
+    else:
+        print("docs/APPLE_SEARCH_ADS.md missing — reinstall package")
+
+
+def cmd_keywords(args: list[str]) -> None:
+    """
+    Competitor keyword gap analysis.
+
+      gsa keywords --yours "ai agent,sop writer" --theirs "lindy,crewai agent"
+      gsa keywords --yours-file mine.txt --theirs-file comp.txt
+      gsa keywords --llm --yours ... --theirs ...   # + worker 4 narrative
+    """
+    rest, loading_override = parse_loading_flags(args)
+    yours: list[str] = []
+    theirs: list[str] = []
+    use_llm = False
+    yours_label, theirs_label = "yours", "theirs"
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in {"--llm", "--watch"}:
+            use_llm = True
+            i += 1
+            continue
+        if a == "--yours" and i + 1 < len(rest):
+            yours.extend(_split_kw_blob(rest[i + 1]))
+            i += 2
+            continue
+        if a == "--theirs" and i + 1 < len(rest):
+            theirs.extend(_split_kw_blob(rest[i + 1]))
+            i += 2
+            continue
+        if a == "--yours-file" and i + 1 < len(rest):
+            yours.extend(_split_kw_blob(Path(rest[i + 1]).read_text(encoding="utf-8")))
+            i += 2
+            continue
+        if a == "--theirs-file" and i + 1 < len(rest):
+            theirs.extend(_split_kw_blob(Path(rest[i + 1]).read_text(encoding="utf-8")))
+            i += 2
+            continue
+        if a == "--yours-label" and i + 1 < len(rest):
+            yours_label = rest[i + 1]
+            i += 2
+            continue
+        if a == "--theirs-label" and i + 1 < len(rest):
+            theirs_label = rest[i + 1]
+            i += 2
+            continue
+        raise SystemExit(
+            "usage: gsa keywords --yours a,b --theirs c,d [--llm] "
+            "[--yours-file f] [--theirs-file f] [loading flags]"
+        )
+
+    if not yours or not theirs:
+        raise SystemExit("Need both --yours and --theirs keyword lists")
+
+    report = analyze_keyword_gaps(
+        yours, theirs, yours_label=yours_label, theirs_label=theirs_label
+    )
+    print(json.dumps(report, indent=2))
+
+    if use_llm:
+        task = (
+            "Analyze this competitor keyword gap report for Apple Search Ads / ASO. "
+            "Prioritize only_theirs (conquest), only_yours (defense), shared (bid wars). "
+            "Output: (1) top 10 actions (2) suggested ASA ad groups (3) risks.\n\n"
+            + json.dumps(report, indent=2)[:12000]
+        )
+        print("\n== Competitor Watcher (LLM) ==\n")
+        print(run_worker(4, task, loading_override=loading_override))
 
 
 def cmd_status(_: list[str]) -> None:
     cfg = load_config()
     llm = resolve_llm(cfg)
+    loading = resolve_loading(cfg)
     print(f"version={VERSION}")
     print(f"env={cfg.get('env')}")
     print(f"provider={llm['provider']}")
@@ -333,6 +625,9 @@ def cmd_status(_: list[str]) -> None:
     print(f"license={'ok' if license_ok() else 'INVALID'}")
     print(f"config={'ok' if CFG_PATH.exists() else 'missing'}")
     print(f"memory={'ok' if MEMORY.exists() else 'missing'}")
+    print(f"loading.mode={loading['mode']}")
+    print(f"loading.memory={loading['memory']} agents_md={loading['agents_md']}")
+    print(f"loading.rag_phase={loading['rag_phase']}")
     print(f"llm_deps=stdlib")
 
 
@@ -364,16 +659,22 @@ def cmd_doctor(_: list[str]) -> None:
 
 
 def cmd_worker(args: list[str]) -> None:
-    if not args:
-        raise SystemExit("usage: gsa worker <1-8> [task...]")
-    wid = int(args[0])
-    task = " ".join(args[1:])
+    rest, loading_override = parse_loading_flags(args)
+    if not rest:
+        raise SystemExit(
+            "usage: gsa worker <1-8> [task...] [--loading system|prepend_user|off] [--no-memory]"
+        )
+    wid = int(rest[0])
+    task = " ".join(rest[1:])
     print(f"== Worker {wid}: {WORKERS[wid]['name']} ==")
-    print(run_worker(wid, task))
+    print(run_worker(wid, task, loading_override=loading_override))
 
 
-def cmd_run(_: list[str]) -> None:
+def cmd_run(args: list[str]) -> None:
+    rest, loading_override = parse_loading_flags(args)
     print(f"GSA {VERSION} — Precision Workers")
+    loading = resolve_loading(override=loading_override)
+    print(f"loading.mode={loading['mode']} memory={loading['memory']}")
     for i, w in WORKERS.items():
         print(f"{i}. {w['name']} — {w['job']}")
     print("Enter worker id (1-8) or q to quit.")
@@ -393,18 +694,23 @@ def cmd_run(_: list[str]) -> None:
             continue
         task = input("task (optional): ").strip()
         try:
-            print(run_worker(wid, task))
+            print(run_worker(wid, task, loading_override=loading_override))
         except SystemExit as e:
             print(e)
             break
 
 
-def cmd_supervisor(_: list[str]) -> None:
+def cmd_supervisor(args: list[str]) -> None:
+    rest, loading_override = parse_loading_flags(args)
     print("Supervisor mode: cycling workers 1-8 (Ctrl+C to stop)")
     while True:
         for wid in WORKERS:
             try:
-                out = run_worker(wid, f"Quick status pulse for {WORKERS[wid]['name']}")
+                out = run_worker(
+                    wid,
+                    f"Quick status pulse for {WORKERS[wid]['name']}",
+                    loading_override=loading_override,
+                )
                 print(f"[{time.strftime('%H:%M:%S')}] W{wid}: {out[:200]}")
             except Exception as e:
                 print(f"W{wid} error: {e}")
@@ -425,6 +731,11 @@ COMMANDS = {
     "worker": cmd_worker,
     "run": cmd_run,
     "supervisor": cmd_supervisor,
+    "keywords": cmd_keywords,
+    "keyword-gaps": cmd_keywords,
+    "gaps": cmd_keywords,
+    "asa": cmd_asa,
+    "loading": cmd_loading,
 }
 
 
