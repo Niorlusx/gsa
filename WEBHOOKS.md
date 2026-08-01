@@ -133,3 +133,13 @@ For full GSA proof (Notion + email + A$97 product filter), prefer the **Payment 
 ### Cloudflare Worker alternative
 
 Scaffold: `cloudflare/stripe-webhook/` — same verify contract; after deploy, create a **new** Stripe endpoint (new URL = new `whsec_`).
+
+### Idempotency keys (implemented)
+
+| Key | Store |
+|-----|--------|
+| `event.id` | `stripe_webhook_events.event_id` PK |
+| `session.id` | unique partial index |
+| `license_key` | same row after fulfill |
+
+See **[docs/STRIPE_WEBHOOKS.md](docs/STRIPE_WEBHOOKS.md)** and **[docs/RLS_AUDIT.md](docs/RLS_AUDIT.md)**.

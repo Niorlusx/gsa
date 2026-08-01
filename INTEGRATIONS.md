@@ -25,12 +25,22 @@
 
 ## Idempotency keys
 
-| Key | Store |
-|-----|--------|
-| `event.id` | `stripe_webhook_events.event_id` PK |
-| `session.id` | fulfill PATCH |
-| `license_key` | fulfill PATCH |
+| Key | Store | On conflict |
+|-----|--------|-------------|
+| `event.id` | `stripe_webhook_events.event_id` **PK** | HTTP 200 `{ duplicate: true }` |
+| `session.id` | unique partial index (where not null) | skip second license |
+| `license_key` | column + index | support / Notion audit |
+
+Implemented in `supabase/functions/stripe-webhook` + migration `20260801120000_…`.
 
 ## RLS
 
-`stripe_webhook_events` + `agent_chunks`: RLS ON, no public policies (service_role only).
+| Table | RLS | Policies | Notes |
+|-------|-----|----------|--------|
+| `stripe_webhook_events` | ON | none | service_role only |
+| `agent_chunks` | ON | none | service_role + `match_agent_chunks` |
+| threads / messages | ON | authenticated | tautology policies **fixed** |
+
+Full audit: **[docs/RLS_AUDIT.md](docs/RLS_AUDIT.md)**  
+Stripe config: **[docs/STRIPE_WEBHOOKS.md](docs/STRIPE_WEBHOOKS.md)**  
+RAG Phase 2: **[rag/](rag/)**

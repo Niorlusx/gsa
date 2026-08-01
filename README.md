@@ -50,7 +50,9 @@ Legacy `connectors.xai` still works. Full docs: **[docs/LLM_CONNECTOR.md](docs/L
 - **Supabase** `stripe-webhook` Edge Function  
 - **Notion** Playbook AI Sales  
 - **Resend** license email  
-- **RAG** Phase 1 memory injection · Phase 2 under `rag/`  
+- **RAG** Phase 1 memory injection · Phase 2 reference under [`rag/`](rag/) (chunking, pgvector, LanceDB)  
+- **Idempotency** Stripe `event.id` PK + `session_id` unique · see `docs/STRIPE_WEBHOOKS.md`  
+- **RLS audit** `docs/RLS_AUDIT.md`  
 - **CI** `.github/workflows/gsa-ci.yml`  
 
 ## Launch
