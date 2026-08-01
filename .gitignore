@@ -1,0 +1,28 @@
+# secrets & env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# logs & local runtime
+logs/
+*.log
+.grok/lancedb/
+.grok/backups/
+.grok/*.local.*
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# test artifacts
+pow_*.txt
