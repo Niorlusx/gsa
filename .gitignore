@@ -12,12 +12,27 @@ __pycache__/
 .venv/
 venv/
 
-# logs & local runtime
-logs/
-*.log
+# node
+node_modules/
+**/node_modules/
+package-lock.json
+**/package-lock.json
+
+# local agent / tool state (not product)
+.agents/
+.aider-desk/
 .grok/lancedb/
 .grok/backups/
 .grok/*.local.*
+skills-lock.json
+
+# mirror / scratch (local only)
+gsa-mirror/
+gsa-github/
+
+# logs & local runtime
+logs/
+*.log
 
 # OS / IDE
 .DS_Store
@@ -26,3 +41,4 @@ logs/
 
 # test artifacts
 pow_*.txt
+*.download

@@ -1,0 +1,16 @@
+{
+  "name": "gsa",
+  "version": "1.5.0",
+  "private": true,
+  "description": "Grok Super Agent — CLI + Supabase server handlers",
+  "type": "module",
+  "scripts": {
+    "server:check": "tsc --noEmit -p server/tsconfig.json"
+  },
+  "dependencies": {
+    "@supabase/server": "^1.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

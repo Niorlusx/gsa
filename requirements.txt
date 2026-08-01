@@ -1,1 +1,5 @@
-openai>=1.40.0
+# GSA v1.5.0+ — stdlib only for the CLI LLM connector.
+# No pip packages required to run: python3 gsa smoke | run | worker N
+#
+# Optional (local tooling only; not used by gsa):
+# openai>=1.40.0

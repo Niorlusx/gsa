@@ -1,0 +1,10 @@
+# Supabase local / deploy config (GSA)
+# Project ref: knqcjedftfgmnhdgjnoo
+
+[functions.stripe-webhook]
+# Stripe cannot send a Supabase JWT — platform JWT check must be off.
+# Auth for this function is Stripe signature verification inside the handler.
+verify_jwt = false
+
+[functions.health]
+verify_jwt = false

@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""GSA — Grok Super Agent CLI (Precision Workers) v1.5.0
+
+LLM connector: stdlib only (urllib). No OpenAI package required.
+See docs/LLM_CONNECTOR.md
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+VERSION = "1.5.0"
+ROOT = Path(__file__).resolve().parent
+CFG_PATH = ROOT / "gsa.config.json"
+MEMORY = ROOT / ".grok" / "project_memory.md"
+AGENTS_MD = ROOT / "AGENTS.md"
+
+VALID_LICENSES = {
+    "GSA-DEMO-2026-LIVE",
+    "GSA-FULL-ACCESS-2026",
+}
+
+# OpenAI-compatible chat completions presets
+LLM_PRESETS: dict[str, dict[str, Any]] = {
+    "xai": {
+        "api_base": "https://api.x.ai/v1",
+        "model": "grok-4.5",
+        "api_key_env": ["GROK_API_KEY", "XAI_API_KEY"],
+    },
+    "openrouter": {
+        "api_base": "https://openrouter.ai/api/v1",
+        "model": "openai/gpt-4o-mini",
+        "api_key_env": ["OPENROUTER_API_KEY"],
+    },
+    "groq": {
+        "api_base": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "api_key_env": ["GROQ_API_KEY"],
+    },
+    "together": {
+        "api_base": "https://api.together.xyz/v1",
+        "model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+        "api_key_env": ["TOGETHER_API_KEY"],
+    },
+    "deepseek": {
+        "api_base": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key_env": ["DEEPSEEK_API_KEY"],
+    },
+    "mistral": {
+        "api_base": "https://api.mistral.ai/v1",
+        "model": "mistral-large-latest",
+        "api_key_env": ["MISTRAL_API_KEY"],
+    },
+    "openai": {
+        "api_base": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "api_key_env": ["OPENAI_API_KEY"],
+    },
+}
+
+WORKERS = {
+    1: {
+        "name": "Lead Researcher",
+        "job": "Find and qualify high-quality leads",
+        "system": "You are Lead Researcher. Find and qualify high-quality B2B leads. Output structured findings only.",
+    },
+    2: {
+        "name": "Outbound Writer",
+        "job": "Write hyper-personalized cold outreach",
+        "system": "You are Outbound Writer. Write hyper-personalized cold outreach. Short, specific, no fluff.",
+    },
+    3: {
+        "name": "Content Repurposer",
+        "job": "Turn one piece of content into many formats",
+        "system": "You are Content Repurposer. Transform one asset into multi-format content packages.",
+    },
+    4: {
+        "name": "Competitor Watcher",
+        "job": "Monitor and analyze competitors",
+        "system": "You are Competitor Watcher. Analyze competitors with evidence-based notes.",
+    },
+    5: {
+        "name": "Proposal Builder",
+        "job": "Create clear client proposals fast",
+        "system": "You are Proposal Builder. Draft clear, priced client proposals.",
+    },
+    6: {
+        "name": "Offer Architect",
+        "job": "Design high-converting offers",
+        "system": "You are Offer Architect. Design high-converting offers and packaging.",
+    },
+    7: {
+        "name": "SOP Writer",
+        "job": "Write clear step-by-step SOPs",
+        "system": "You are SOP Writer. Produce clear step-by-step SOPs.",
+    },
+    8: {
+        "name": "Super Strategist",
+        "job": "High-level business & product strategy",
+        "system": "You are Super Strategist. Deliver high-level business and product strategy.",
+    },
+}
+
+
+def load_config() -> dict:
+    if CFG_PATH.exists():
+        return json.loads(CFG_PATH.read_text(encoding="utf-8"))
+    return {
+        "env": os.getenv("GSA_ENV", "development"),
+        "workers": list(WORKERS.keys()),
+        "connectors": {
+            "llm": {
+                "provider": "xai",
+                "api_base": "https://api.x.ai/v1",
+                "model": "grok-4.5",
+                "temperature": 0.4,
+                "api_key_env": ["GROK_API_KEY", "XAI_API_KEY"],
+            }
+        },
+    }
+
+
+def resolve_llm(cfg: dict | None = None) -> dict[str, Any]:
+    """Merge connectors.llm with presets; fall back to connectors.xai then top-level keys."""
+    cfg = cfg if cfg is not None else load_config()
+    connectors = cfg.get("connectors") or {}
+    llm = dict(connectors.get("llm") or {})
+
+    # Legacy connectors.xai fallback when connectors.llm is empty/missing
+    if not llm and connectors.get("xai"):
+        xai = dict(connectors["xai"])
+        llm = {
+            "provider": "xai",
+            "api_base": xai.get("api_base") or xai.get("base_url") or "https://api.x.ai/v1",
+            "model": xai.get("model", "grok-4.5"),
+            "temperature": xai.get("temperature", 0.4),
+            "api_key_env": xai.get("api_key_env") or ["GROK_API_KEY", "XAI_API_KEY"],
+        }
+
+    provider = (llm.get("provider") or "xai").lower().strip()
+    preset = dict(LLM_PRESETS.get(provider) or LLM_PRESETS["xai"])
+
+    # Top-level legacy keys (pre-1.5.0 config shape)
+    if not llm.get("api_base") and cfg.get("base_url"):
+        llm["api_base"] = cfg["base_url"]
+    if not llm.get("model") and cfg.get("model"):
+        llm["model"] = cfg["model"]
+    if not llm.get("api_key_env") and cfg.get("api_key_env"):
+        llm["api_key_env"] = cfg["api_key_env"]
+
+    resolved = {
+        "provider": provider if provider in LLM_PRESETS else "xai",
+        "api_base": (llm.get("api_base") or preset["api_base"]).rstrip("/"),
+        "model": llm.get("model") or preset["model"],
+        "temperature": float(llm.get("temperature", 0.4)),
+        "api_key_env": list(llm.get("api_key_env") or preset["api_key_env"]),
+    }
+    return resolved
+
+
+def api_key(llm: dict | None = None) -> str | None:
+    llm = llm or resolve_llm()
+    for name in llm.get("api_key_env") or []:
+        val = os.getenv(name)
+        if val:
+            return val
+    # Last-chance common aliases for xAI
+    return os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+
+
+def license_ok() -> bool:
+    lic = os.getenv("GROK_LICENSE", "")
+    return lic in VALID_LICENSES
+
+
+def memory_block() -> str:
+    parts = []
+    if MEMORY.exists():
+        parts.append(MEMORY.read_text(encoding="utf-8")[:4000])
+    if AGENTS_MD.exists():
+        parts.append(AGENTS_MD.read_text(encoding="utf-8")[:2000])
+    return "\n\n".join(parts)
+
+
+def chat_completions(
+    messages: list[dict[str, str]],
+    *,
+    llm: dict | None = None,
+    temperature: float | None = None,
+) -> str:
+    """POST /chat/completions via stdlib urllib. OpenAI-compatible providers only."""
+    llm = llm or resolve_llm()
+    key = api_key(llm)
+    if not key:
+        envs = ", ".join(llm.get("api_key_env") or [])
+        raise SystemExit(f"Missing API key. Set one of: {envs}")
+
+    url = f"{llm['api_base']}/chat/completions"
+    body = {
+        "model": llm["model"],
+        "messages": messages,
+        "temperature": llm["temperature"] if temperature is None else temperature,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+            "User-Agent": f"gsa/{VERSION}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:800]
+        raise SystemExit(f"LLM HTTP {e.code}: {err_body}") from e
+    except urllib.error.URLError as e:
+        raise SystemExit(f"LLM connection error: {e.reason}") from e
+
+    try:
+        return payload["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError) as e:
+        raise SystemExit(f"Unexpected LLM response: {json.dumps(payload)[:500]}") from e
+
+
+def run_worker(wid: int, task: str = "") -> str:
+    if not license_ok():
+        raise SystemExit("Invalid GROK_LICENSE. Use GSA-DEMO-2026-LIVE or GSA-FULL-ACCESS-2026")
+    if wid not in WORKERS:
+        raise SystemExit(f"Unknown worker {wid}. Use 1-8.")
+    w = WORKERS[wid]
+    llm = resolve_llm()
+    mem = memory_block()
+    system = w["system"]
+    if mem:
+        system += "\n\n# Project memory\n" + mem
+    user = task or f"Execute your core job: {w['job']}. Give a concise actionable result."
+    return chat_completions(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        llm=llm,
+    )
+
+
+def cmd_version(_: list[str]) -> None:
+    print(f"GSA {VERSION}")
+
+
+def cmd_help(_: list[str]) -> None:
+    print(
+        """GSA commands:
+  run | worker <1-8> [task] | supervisor
+  smoke | doctor | status | config | license | schema | roadmap | version | help
+
+LLM: stdlib connector (no pip openai). Config: connectors.llm — see docs/LLM_CONNECTOR.md"""
+    )
+
+
+def cmd_license(_: list[str]) -> None:
+    lic = os.getenv("GROK_LICENSE", "")
+    print(f"GROK_LICENSE={lic or '(unset)'}")
+    print("valid" if license_ok() else "INVALID")
+
+
+def cmd_config(_: list[str]) -> None:
+    cfg = load_config()
+    out = dict(cfg)
+    out["_resolved_llm"] = resolve_llm(cfg)
+    print(json.dumps(out, indent=2))
+
+
+def cmd_schema(_: list[str]) -> None:
+    agents = [
+        {
+            "id": str(i),
+            "name": w["name"],
+            "job": w["job"],
+            "abilities": [w["job"]],
+            "outputFormat": "proof-of-work",
+            "roleConstraints": True,
+            "run": f"gsa worker {i}",
+        }
+        for i, w in WORKERS.items()
+    ]
+    print(
+        json.dumps(
+            {
+                "system": {
+                    "name": "Grok Super Agent — Precision Workers",
+                    "version": VERSION,
+                    "cli": "gsa",
+                    "licenseKeyRequired": True,
+                },
+                "agents": agents,
+            },
+            indent=2,
+        )
+    )
+
+
+def cmd_roadmap(_: list[str]) -> None:
+    print(
+        """Roadmap:
+  Phase 1: CLI + 8 workers + license + RAG memory + stdlib LLM connector (current)
+  Phase 2: rag/ retrieval
+  Phase 3: Stripe webhook licenses + Supabase edge
+  Phase 4: supervisor fleet + dashboards"""
+    )
+
+
+def cmd_status(_: list[str]) -> None:
+    cfg = load_config()
+    llm = resolve_llm(cfg)
+    print(f"version={VERSION}")
+    print(f"env={cfg.get('env')}")
+    print(f"provider={llm['provider']}")
+    print(f"model={llm['model']}")
+    print(f"api_base={llm['api_base']}")
+    print(f"key={'set' if api_key(llm) else 'MISSING'}")
+    print(f"license={'ok' if license_ok() else 'INVALID'}")
+    print(f"config={'ok' if CFG_PATH.exists() else 'missing'}")
+    print(f"memory={'ok' if MEMORY.exists() else 'missing'}")
+    print(f"llm_deps=stdlib")
+
+
+def cmd_smoke(_: list[str]) -> None:
+    errors = []
+    if not CFG_PATH.exists():
+        errors.append("gsa.config.json missing")
+    try:
+        resolve_llm()
+    except Exception as e:
+        errors.append(f"llm resolve failed: {e}")
+    # stdlib only — no third-party import required
+    if errors:
+        print("SMOKE FAILED:")
+        for e in errors:
+            print(" -", e)
+        sys.exit(1)
+    print("SMOKE PASSED")
+    print(f"GSA {VERSION}")
+    print(f"workers={len(WORKERS)}")
+    print("llm=stdlib")
+
+
+def cmd_doctor(_: list[str]) -> None:
+    cmd_status([])
+    print(f"agents_md={'ok' if AGENTS_MD.exists() else 'missing'}")
+    print(f"llm_docs={'ok' if (ROOT / 'docs' / 'LLM_CONNECTOR.md').exists() else 'missing'}")
+    print("doctor complete")
+
+
+def cmd_worker(args: list[str]) -> None:
+    if not args:
+        raise SystemExit("usage: gsa worker <1-8> [task...]")
+    wid = int(args[0])
+    task = " ".join(args[1:])
+    print(f"== Worker {wid}: {WORKERS[wid]['name']} ==")
+    print(run_worker(wid, task))
+
+
+def cmd_run(_: list[str]) -> None:
+    print(f"GSA {VERSION} — Precision Workers")
+    for i, w in WORKERS.items():
+        print(f"{i}. {w['name']} — {w['job']}")
+    print("Enter worker id (1-8) or q to quit.")
+    while True:
+        try:
+            choice = input("> ").strip().lower()
+        except EOFError:
+            break
+        if choice in {"q", "quit", "exit"}:
+            break
+        if not choice.isdigit():
+            print("Enter 1-8 or q")
+            continue
+        wid = int(choice)
+        if wid not in WORKERS:
+            print("1-8 only")
+            continue
+        task = input("task (optional): ").strip()
+        try:
+            print(run_worker(wid, task))
+        except SystemExit as e:
+            print(e)
+            break
+
+
+def cmd_supervisor(_: list[str]) -> None:
+    print("Supervisor mode: cycling workers 1-8 (Ctrl+C to stop)")
+    while True:
+        for wid in WORKERS:
+            try:
+                out = run_worker(wid, f"Quick status pulse for {WORKERS[wid]['name']}")
+                print(f"[{time.strftime('%H:%M:%S')}] W{wid}: {out[:200]}")
+            except Exception as e:
+                print(f"W{wid} error: {e}")
+            time.sleep(2)
+        time.sleep(30)
+
+
+COMMANDS = {
+    "version": cmd_version,
+    "help": cmd_help,
+    "license": cmd_license,
+    "config": cmd_config,
+    "schema": cmd_schema,
+    "roadmap": cmd_roadmap,
+    "status": cmd_status,
+    "smoke": cmd_smoke,
+    "doctor": cmd_doctor,
+    "worker": cmd_worker,
+    "run": cmd_run,
+    "supervisor": cmd_supervisor,
+}
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    if not args:
+        cmd_help([])
+        return
+    cmd = args[0].lower()
+    rest = args[1:]
+    fn = COMMANDS.get(cmd)
+    if not fn:
+        print(f"Unknown command: {cmd}")
+        cmd_help([])
+        sys.exit(1)
+    fn(rest)
+
+
+if __name__ == "__main__":
+    main()

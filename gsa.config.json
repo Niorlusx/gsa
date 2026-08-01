@@ -1,0 +1,15 @@
+{
+  "env": "development",
+  "project_ref": "knqcjedftfgmnhdgjnoo",
+  "workers": [1, 2, 3, 4, 5, 6, 7, 8],
+  "license_env": "GROK_LICENSE",
+  "connectors": {
+    "llm": {
+      "provider": "xai",
+      "api_base": "https://api.x.ai/v1",
+      "model": "grok-4.5",
+      "temperature": 0.4,
+      "api_key_env": ["GROK_API_KEY", "XAI_API_KEY"]
+    }
+  }
+}
