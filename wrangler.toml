@@ -1,0 +1,40 @@
+name = "omni-10x-hyper-agent"
+main = "src/index.ts"
+compatibility_date = "2024-08-04"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare KV Bindings
+[[kv_namespaces]]
+binding = "KB_STORE"
+id = "omni-kb-store"
+
+# Environment Configuration
+[env.production]
+name = "omni-10x-hyper-agent-prod"
+vars = { ENVIRONMENT = "production", LOG_LEVEL = "info" }
+
+[env.staging]
+name = "omni-10x-hyper-agent-staging"
+vars = { ENVIRONMENT = "staging", LOG_LEVEL = "debug" }
+
+[env.development]
+name = "omni-10x-hyper-agent-dev"
+vars = { ENVIRONMENT = "development", LOG_LEVEL = "debug" }
+
+# Triggers & Cron Jobs
+[[triggers.crons]]
+cron = "0 */6 * * *"
+
+# Build Configuration
+[build]
+command = "npm run build"
+cwd = "."
+watch_paths = ["src/**/*.ts"]
+
+# Observability
+[observability]
+enabled = true
+
+# Limits
+[limits]
+cpu_ms = 50000
