@@ -1,0 +1,15 @@
+{
+  "name": "meberunning-music-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "ARTIST": "Ash Garner",
+    "LABEL": "Meberunning Records",
+    "HUB_VERSION": "0.1.0"
+  }
+}
