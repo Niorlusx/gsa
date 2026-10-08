@@ -1,0 +1,28 @@
+name: gsa-daily
+
+on:
+  schedule:
+    # 09:00 Australia/Melbourne during AEDT (UTC+11). AEST would be 23:00 UTC.
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install openai
+
+      - name: Doctor and smoke
+        run: python3 gsa doctor && python3 gsa smoke
+        env:
+          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+          GROK_LICENSE: ${{ secrets.GROK_LICENSE }}
